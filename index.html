@@ -283,6 +283,10 @@ dl.kv dd{margin:2px 0 0;font-weight:600;overflow-wrap:anywhere}
 .scan-grid{display:grid;grid-template-columns:minmax(0,390px) 1fr;gap:20px;align-items:start}
 @media (max-width:950px){.scan-grid{grid-template-columns:1fr}}
 #reader{width:100%;aspect-ratio:1/1;max-height:390px;background:var(--pine);border-radius:var(--r);overflow:hidden;display:grid;place-items:center;color:rgba(255,255,255,.6);position:relative}
+.scan-btns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0 16px}
+.scan-btns .btn{width:100%;min-width:0;white-space:normal;text-align:center;padding-left:10px;padding-right:10px}
+@media (max-width:560px){.scan-btns .btn.big{font-size:.95rem;min-height:50px}#reader{max-height:300px}}
+#reader video{width:100%!important;height:100%!important;object-fit:cover}
 #reader.idle::after{content:"";position:absolute;inset:22%;border:2px solid rgba(194,155,58,.7);border-radius:12px}
 .verdict{border-radius:var(--r);padding:24px 24px 22px;color:#fff;margin-bottom:16px;position:relative;overflow:hidden}
 .verdict h2{font-size:2.2rem;font-weight:800;letter-spacing:-.025em}
@@ -424,7 +428,7 @@ dl.kv dd{margin:2px 0 0;font-weight:600;overflow-wrap:anywhere}
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
-<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
@@ -484,7 +488,8 @@ const ICON = {
   truck: '<path d="M2 6h11v10H2zM13 10h5l3 3v3h-8"/><circle cx="6" cy="18" r="2"/><circle cx="17" cy="18" r="2"/>',
   pdf: '<path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>',
   xls: '<rect x="4" y="3" width="16" height="18" rx="1"/><path d="M4 9h16M4 15h16M10 3v18"/>',
-  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  photo: '<rect x="3" y="6" width="18" height="14" rx="2"/><circle cx="12" cy="13" r="3.5"/><path d="M8 6l1.5-2h5L16 6"/>'
 };
 const ico = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k]}</svg>`;
 
@@ -1166,23 +1171,64 @@ V.scan = async (main, params = {}) => {
   main.innerHTML = head(cu ? 'Gate scan' : 'Scan QR', cu ? 'Scan the NOC, match the vehicle, driver and goods, then mark it as used. Each NOC works only once.' : 'Scan a NOC to see its full record. Only Customs can mark it as used.') + `
   <div class="scan-grid"><section>
     <div id="reader" class="idle">Camera is off</div>
-    <div class="row" style="margin:12px 0 16px"><button class="btn primary big wide" id="cam">Start camera</button></div>
+    <div id="camMsg"></div>
+    <div class="scan-btns">
+      <button class="btn primary big" id="cam">${ico('scan')}Start camera</button>
+      <label class="btn big" for="qrFile">${ico('photo')}Scan from photo</label>
+      <input type="file" id="qrFile" accept="image/*" capture="environment" hidden>
+    </div>
+    <div id="qrTmp" hidden></div>
     <form id="mf" class="card" style="padding:16px 18px"><label class="f" for="mc">Or type / paste the code</label>
       <div class="row" style="flex-wrap:nowrap"><input type="text" id="mc" autocomplete="off" placeholder="Code from the QR link"><button class="btn">Check</button></div></form>
   </section><section id="res"><div class="card empty">Scan a QR code to see the NOC.</div></section></div>`;
+  const msg = html => { $('#camMsg').innerHTML = html ? `<div class="note warn" style="margin:12px 0 0">${html}</div>` : ''; };
+  const idle = () => { $('#reader').className = 'idle'; $('#reader').textContent = 'Camera is off'; $('#cam').innerHTML = ico('scan') + 'Start camera'; };
+  const onCode = async text => { await stopScanner(); idle(); if (navigator.vibrate) navigator.vibrate(120); checkCode(text); };
+  const camHelp = e => {
+    const n = (e && (e.name || '')) + ' ' + String(e && e.message || e || '');
+    const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent), inApp = /FBAN|FBAV|Instagram|WhatsApp|Line\/|; wv\)/i.test(navigator.userAgent);
+    if (!window.isSecureContext) return '<b>The camera only works on the https:// link.</b> This page was opened from a file or an http:// address. Open the website link (for example https://....netlify.app), or use <b>Scan from photo</b> below.';
+    if (inApp) return '<b>This page is open inside another app</b> (WhatsApp, Facebook etc.), which blocks the camera. Open the link in <b>' + (ios ? 'Safari' : 'Chrome') + '</b>, or use <b>Scan from photo</b>.';
+    if (/NotAllowed|Permission|denied/i.test(n)) return '<b>Camera permission is blocked.</b> ' + (ios
+      ? 'On iPhone: Settings &gt; Safari &gt; Camera &gt; Allow. Or tap "aA" in the Safari address bar &gt; Website Settings &gt; Camera &gt; Allow. Then reload the page.'
+      : 'In Chrome: tap the lock icon next to the address &gt; Permissions &gt; Camera &gt; Allow. Then reload the page.') + ' Meanwhile you can use <b>Scan from photo</b>.';
+    if (/NotFound|Overconstrained|no camera|Requested device/i.test(n)) return '<b>No camera was found on this device.</b> Use <b>Scan from photo</b> or type the code.';
+    if (/NotReadable|in use|Could not start|TrackStart/i.test(n)) return '<b>The camera is busy.</b> Close other apps that use the camera (WhatsApp call, camera app) and try again.';
+    return '<b>The camera could not start.</b> ' + esc(n.trim()) + '. Try reloading the page, or use <b>Scan from photo</b>.';
+  };
   $('#cam').onclick = async () => {
-    if (S.scanner) { await stopScanner(); $('#reader').className = 'idle'; $('#reader').textContent = 'Camera is off'; $('#cam').textContent = 'Start camera'; return; }
-    if (!window.Html5Qrcode) { toast('Scanner did not load. Check the internet connection.', 'err'); return; }
-    $('#reader').className = ''; $('#reader').innerHTML = ''; S.scanner = new Html5Qrcode('reader');
+    if (S.scanner) { await stopScanner(); idle(); return; }
+    msg('');
+    if (!window.Html5Qrcode) { msg('<b>The scanner did not load.</b> Check the internet connection and reload the page. You can still type the code below.'); return; }
+    if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { msg(camHelp()); return; }
+    $('#reader').className = ''; $('#reader').innerHTML = ''; $('#cam').disabled = true;
+    const cfg = {fps: 10, qrbox: (w, h) => { const m = Math.floor(Math.min(w, h) * 0.7); return {width: m, height: m}; }, aspectRatio: 1};
     try {
-      await S.scanner.start({facingMode: 'environment'}, {fps: 10, qrbox: {width: 240, height: 240}}, async text => {
-        await stopScanner(); $('#cam').textContent = 'Start camera'; $('#reader').className = 'idle'; $('#reader').textContent = 'Camera is off';
-        if (navigator.vibrate) navigator.vibrate(120); checkCode(text);
-      });
-      $('#cam').textContent = 'Stop camera';
-    } catch (e) { S.scanner = null; $('#reader').className = 'idle'; $('#reader').textContent = 'Camera is off'; toast('Could not open the camera. Allow camera permission and use the https:// address.', 'err'); }
+      S.scanner = new Html5Qrcode('reader');
+      try { await S.scanner.start({facingMode: 'environment'}, cfg, onCode); }
+      catch (e1) {
+        if (/NotAllowed|Permission|denied/i.test((e1 && e1.name || '') + String(e1))) throw e1;
+        const cams = await Html5Qrcode.getCameras();
+        if (!cams || !cams.length) throw e1;
+        const back = cams.find(c => /back|rear|environment/i.test(c.label)) || cams[cams.length - 1];
+        await S.scanner.start(back.id, cfg, onCode);
+      }
+      $('#cam').innerHTML = ico('scan') + 'Stop camera';
+    } catch (e) {
+      try { S.scanner && S.scanner.clear(); } catch (x) {} S.scanner = null; idle(); msg(camHelp(e));
+    } finally { $('#cam').disabled = false; }
+  };
+  $('#qrFile').onchange = async e => {
+    const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
+    if (!window.Html5Qrcode) { msg('<b>The scanner did not load.</b> Check the internet connection and reload the page.'); return; }
+    if (S.scanner) { await stopScanner(); idle(); }
+    msg(''); $('#res').innerHTML = '<div class="card empty"><span class="spin"></span> Reading the photo</div>';
+    try { const text = await new Html5Qrcode('qrTmp').scanFile(f, false); checkCode(text); }
+    catch (err) { $('#res').innerHTML = '<div class="card empty">Scan a QR code to see the NOC.</div>';
+      msg('<b>No QR code was found in the photo.</b> Take the photo closer, keep the QR flat and in good light, and try again.'); }
   };
   $('#mf').onsubmit = e => { e.preventDefault(); const v = $('#mc').value.trim(); if (v) checkCode(v); };
+  if (!window.isSecureContext) msg(camHelp());
   if (params.code) checkCode(params.code);
 };
 async function checkCode(code) {
